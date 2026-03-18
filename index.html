@@ -472,11 +472,14 @@
 
             try {
                 // Tesseract OCR 初期化と言語データ指定
+                showLoading('OCRエンジン初期化中...');
                 const worker = await Tesseract.createWorker('jpn', 1, {
                     workerPath: './tesseract.min.js',
                     corePath: './tesseract.min.js',
-                    langPath: './', // gzip データがここにある
+                    langPath: './',
                 });
+                
+                showLoading('OCR実行およびPDF生成中...\n(テキスト抽出中)');
                 
                 // OCR: 最初のページからテキスト抽出 (全ページやると重すぎるため)
                 const { data: { text } } = await worker.recognize(capturedPages[0]);
@@ -486,18 +489,22 @@
                 const dateStr = new Date().toISOString().slice(0,10).replace(/-/g, '');
                 const filename = `Scan_${dateStr}_${safeText || 'Data'}.pdf`;
 
-                // jsPDFで生成
-                const { jsPDF } = window.jspdf;
+                // jsPDFで生成 (Umd版からの抽出)
+                const jsPDF = window.jspdf.jsPDF;
                 const pdf = new jsPDF('p', 'mm', 'a4');
                 const pdfW = pdf.internal.pageSize.getWidth();
                 const pdfH = pdf.internal.pageSize.getHeight();
 
                 for(let i=0; i<capturedPages.length; i++) {
                     if (i > 0) pdf.addPage();
-                    let imgProps = pdf.getImageProperties(capturedPages[i]);
-                    let ratio = Math.min(pdfW / imgProps.width, pdfH / imgProps.height);
-                    let imgW = imgProps.width * ratio;
-                    let imgH = imgProps.height * ratio;
+                    // jsPDF v2 では getImageProperties などの扱いが変わる場合があるが、直接寸法を取得するかダミー画像を使う
+                    const img = new Image();
+                    img.src = capturedPages[i];
+                    await new Promise(r => { img.onload = r; });
+                    
+                    let ratio = Math.min(pdfW / img.width, pdfH / img.height);
+                    let imgW = img.width * ratio;
+                    let imgH = img.height * ratio;
                     let x = (pdfW - imgW) / 2;
                     let y = (pdfH - imgH) / 2;
                     pdf.addImage(capturedPages[i], 'JPEG', x, y, imgW, imgH);

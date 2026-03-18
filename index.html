@@ -70,7 +70,8 @@
 
         <h3 style="margin-top:20px;">ページ一覧 (<span id="pageCount">0</span>)</h3>
         <div id="thumbnailList"></div>
-        <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有 (OCR付)</button>
+        <button id="btnRunOCR" class="btn btn-primary" style="display:none; width: 100%; margin-top: 10px;">🔍 OCRでテキスト抽出 (オプション)</button>
+        <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有</button>
 
     </main>
 
@@ -456,6 +457,7 @@
             document.getElementById('thumbnailList').appendChild(img);
             
             document.getElementById('pageCount').innerText = capturedPages.length;
+            document.getElementById('btnRunOCR').style.display = 'block';
             document.getElementById('btnGenerateShare').style.display = 'block';
             
             // 状態リセット
@@ -465,29 +467,43 @@
             if(originalMat) { originalMat.delete(); originalMat = null; }
         });
 
-        // PDF生成＆OCR共有
-        document.getElementById('btnGenerateShare').addEventListener('click', async () => {
+        // OCR実行用
+        document.getElementById('btnRunOCR').addEventListener('click', async () => {
             if(capturedPages.length === 0) return;
-            showLoading('OCR実行およびPDF生成中...\n(初回は特に時間がかかります)');
-
+            showLoading('OCRエンジン初期化中...');
             try {
-                // Tesseract OCR 初期化と言語データ指定
-                showLoading('OCRエンジン初期化中...');
                 const worker = await Tesseract.createWorker('jpn', 1, {
                     workerPath: './tesseract.min.js',
                     corePath: './tesseract.min.js',
                     langPath: './',
                 });
                 
-                showLoading('OCR実行およびPDF生成中...\n(テキスト抽出中)');
-                
-                // OCR: 最初のページからテキスト抽出 (全ページやると重すぎるため)
+                showLoading('テキスト抽出中...');
                 const { data: { text } } = await worker.recognize(capturedPages[0]);
                 await worker.terminate();
 
-                const safeText = text.replace(/[\r\n\s]/g, '').slice(0, 10);
+                const safeText = text.replace(/[\r\n\s]/g, '');
+                alert('OCR抽出結果:\n' + (safeText || 'テキストが見つかりませんでした'));
+                
+                // 次のPDF出力ファイル名のために保持
+                window.lastOCRText = safeText.slice(0, 10);
+                hideLoading();
+            } catch (err) {
+                console.error("OCR Error:", err);
+                alert('OCR処理中にエラーが発生しました: ' + (err.message || JSON.stringify(err)));
+                hideLoading();
+            }
+        });
+
+        // PDF生成＆共有
+        document.getElementById('btnGenerateShare').addEventListener('click', async () => {
+            if(capturedPages.length === 0) return;
+            showLoading('PDF生成中...');
+
+            try {
+                const safeText = window.lastOCRText || 'Data';
                 const dateStr = new Date().toISOString().slice(0,10).replace(/-/g, '');
-                const filename = `Scan_${dateStr}_${safeText || 'Data'}.pdf`;
+                const filename = `Scan_${dateStr}_${safeText}.pdf`;
 
                 // jsPDFで生成 (Umd版からの抽出)
                 const jsPDF = window.jspdf.jsPDF;
@@ -497,7 +513,6 @@
 
                 for(let i=0; i<capturedPages.length; i++) {
                     if (i > 0) pdf.addPage();
-                    // jsPDF v2 では getImageProperties などの扱いが変わる場合があるが、直接寸法を取得するかダミー画像を使う
                     const img = new Image();
                     img.src = capturedPages[i];
                     await new Promise(r => { img.onload = r; });
@@ -536,8 +551,8 @@
                 }
 
             } catch (err) {
-                console.error(err);
-                alert('処理中にエラーが発生しました: ' + err.message);
+                console.error("PDF/Share Error:", err);
+                alert('PDF作成中にエラーが発生しました: ' + (err.message || JSON.stringify(err)));
                 hideLoading();
             }
         });

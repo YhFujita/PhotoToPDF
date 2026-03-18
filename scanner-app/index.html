@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Scanner App</title>
+    <link rel="manifest" href="./manifest.json">
+    <style>
+        :root {
+            --primary: #007bff;
+            --secondary: #6c757d;
+            --success: #28a745;
+            --danger: #dc3545;
+        }
+        body { font-family: sans-serif; margin: 0; padding: 0; background: #f4f4f4; }
+        header { background: #333; color: white; padding: 15px; text-align: center; font-size: 1.2rem; }
+        main { padding: 15px; max-width: 800px; margin: 0 auto; }
+        .btn {
+            display: inline-block; padding: 10px 15px; margin: 5px;
+            background: var(--secondary); color: white; border: none; border-radius: 4px;
+            cursor: pointer; font-size: 1rem; text-decoration: none; text-align: center;
+        }
+        .btn-primary { background: var(--primary); }
+        .btn-success { background: var(--success); }
+        .btn-danger { background: var(--danger); }
+        #canvasContainer { position: relative; max-width: 100%; border: 1px solid #ccc; margin: 10px 0; touch-action: none; display: none; background: #fff;}
+        #mainCanvas { width: 100%; height: auto; display: block; }
+        #thumbnailList { display: flex; overflow-x: auto; gap: 10px; margin-top: 10px; padding: 10px 0;}
+        .thumbnail { width: 100px; height: 141px; object-fit: cover; border: 1px solid #ccc; }
+        #loadingOverlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); color: white; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 1000; font-size: 1.5rem; display: none;
+        }
+        .loader {
+            border: 8px solid #f3f3f3; border-top: 8px solid var(--primary);
+            border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <header>Scanner App</header>
+    
+    <div id="loadingOverlay">
+        <div class="loader"></div>
+        <div id="loadingText">処理中...</div>
+    </div>
+
+    <main>
+        <div id="statusMsg" style="color:red; margin-bottom:10px;"></div>
+        
+        <div>
+            <label for="cameraInput" class="btn btn-primary">📷 写真を撮る / 選ぶ</label>
+            <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;">
+        </div>
+        
+        <div id="editControls" style="display:none; margin-top:10px;">
+            <button id="btnAutoDetect" class="btn">自動領域検出</button>
+            <button id="btnPerspective" class="btn btn-success">台形補正実行</button>
+            <button id="btnBinarize" class="btn">白黒化</button>
+            <button id="btnHoughRotate" class="btn">自動回転補正</button>
+            <button id="btnSavePage" class="btn btn-primary" style="margin-top: 10px; width: 100%;">📄 このページを確定</button>
+            <div style="font-size: 0.8rem; color: #666; margin-top: 5px;">※キャンバス上の○をドラッグして領域（4点）を手動調整できます</div>
+        </div>
+
+        <div id="canvasContainer">
+            <canvas id="mainCanvas"></canvas>
+        </div>
+
+        <h3 style="margin-top:20px;">ページ一覧 (<span id="pageCount">0</span>)</h3>
+        <div id="thumbnailList"></div>
+        <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有 (OCR付)</button>
+
+    </main>
+
+    <!-- Scripts: ローカルファイルとして配置 -->
+    <script src="./jspdf.umd.min.js"></script>
+    <script src="./tesseract.min.js"></script>
+    <!-- OpenCV is loaded asynchronously -->
+    <script async src="./opencv.js" onload="onOpenCvReady();"></script>
+
+    <script>
+        // PWA サービスワーカー
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js').catch(err => console.error(err));
+        }
+
+        let cvReady = false;
+        function onOpenCvReady() {
+            cv['onRuntimeInitialized'] = () => {
+                cvReady = true;
+                document.getElementById('statusMsg').innerText = "OpenCV 準備完了";
+                setTimeout(() => document.getElementById('statusMsg').innerText = "", 2000);
+            };
+        }
+
+        // State
+        const imageCanvas = document.getElementById('mainCanvas');
+        const ctx = imageCanvas.getContext('2d');
+        let originalMat = null;
+        let displayMat = null;
+        let points = []; 
+        let isDragging = false;
+        let dragIndex = -1;
+        let capturedPages = [];
+
+        // Loading overlay
+        const showLoading = (text) => {
+            document.getElementById('loadingText').innerText = text || '処理中...';
+            document.getElementById('loadingOverlay').style.display = 'flex';
+        };
+        const hideLoading = () => {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        };
+
+        // UI Helpers
+        const redrawCanvas = () => {
+            if(!displayMat) return;
+            cv.imshow('mainCanvas', displayMat);
+            // Draw points if they exist mode
+            if(points.length === 4) {
+                ctx.fillStyle = 'rgba(0,123,255,0.7)';
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                
+                // Draw polygon
+                ctx.beginPath();
+                ctx.moveTo(points[0].x, points[0].y);
+                for(let i=1; i<4; i++) ctx.lineTo(points[i].x, points[i].y);
+                ctx.closePath();
+                ctx.strokeStyle = 'rgba(0,123,255,0.7)';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+
+                // Draw circles
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                for(let p of points) {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, (imageCanvas.width < 500 ? 10 : 20), 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.stroke();
+                }
+            }
+        };
+
+        document.getElementById('cameraInput').addEventListener('change', (e) => {
+            if(!cvReady) return alert('OpenCVがまだ準備できていません。');
+            const file = e.target.files[0];
+            if(!file) return;
+            showLoading('画像読み込み中...');
+            
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    if(originalMat) originalMat.delete();
+                    if(displayMat) displayMat.delete();
+                    
+                    // キャンバスサイズの制限(パフォーマンスのため)
+                    const MAX_WIDTH = 1200;
+                    let w = img.width, h = img.height;
+                    if(w > MAX_WIDTH) { h = Math.floor(h * (MAX_WIDTH / w)); w = MAX_WIDTH; }
+                    
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = w; tempCanvas.height = h;
+                    const tCtx = tempCanvas.getContext('2d');
+                    tCtx.drawImage(img, 0, 0, w, h);
+                    
+                    originalMat = cv.imread(tempCanvas);
+                    displayMat = originalMat.clone();
+                    
+                    // 初期4点設定 (画像枠より少し内側)
+                    points = [
+                        {x: w*0.1, y: h*0.1},
+                        {x: w*0.9, y: h*0.1},
+                        {x: w*0.9, y: h*0.9},
+                        {x: w*0.1, y: h*0.9}
+                    ];
+                    
+                    document.getElementById('canvasContainer').style.display = 'block';
+                    document.getElementById('editControls').style.display = 'block';
+                    redrawCanvas();
+                    hideLoading();
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // Pointer Events for manual adjustment
+        const getPointerPos = (e) => {
+            const rect = imageCanvas.getBoundingClientRect();
+            // キャンバス内のCSS表示サイズと実際のピクセル数の比率を計算
+            const scaleX = imageCanvas.width / rect.width;
+            const scaleY = imageCanvas.height / rect.height;
+            return {
+                x: (e.clientX - rect.left) * scaleX,
+                y: (e.clientY - rect.top) * scaleY
+            };
+        };
+
+        imageCanvas.addEventListener('pointerdown', (e) => {
+            if(points.length !== 4) return;
+            e.preventDefault();
+            const pos = getPointerPos(e);
+            let minDist = Infinity;
+            let targetIdx = -1;
+            const hitRadius = imageCanvas.width < 500 ? 900 : 3600; // 距離の2乗(30^2 or 60^2)
+            
+            for(let i=0; i<4; i++) {
+                const dist = Math.pow(points[i].x - pos.x, 2) + Math.pow(points[i].y - pos.y, 2);
+                if(dist < hitRadius && dist < minDist) {
+                    minDist = dist;
+                    targetIdx = i;
+                }
+            }
+            if(targetIdx !== -1) {
+                isDragging = true;
+                dragIndex = targetIdx;
+            }
+        });
+
+        imageCanvas.addEventListener('pointermove', (e) => {
+            if(!isDragging) return;
+            e.preventDefault();
+            const pos = getPointerPos(e);
+            // 範囲内に制限
+            pos.x = Math.max(0, Math.min(imageCanvas.width, pos.x));
+            pos.y = Math.max(0, Math.min(imageCanvas.height, pos.y));
+            points[dragIndex] = pos;
+            redrawCanvas();
+        });
+
+        const stopDrag = (e) => { isDragging = false; dragIndex = -1; };
+        imageCanvas.addEventListener('pointerup', stopDrag);
+        imageCanvas.addEventListener('pointerleave', stopDrag);
+
+        // 自動台形検出
+        document.getElementById('btnAutoDetect').addEventListener('click', () => {
+            showLoading('自動検出中...');
+            setTimeout(() => {
+                let gray = new cv.Mat();
+                let blurred = new cv.Mat();
+                let edged = new cv.Mat();
+                cv.cvtColor(displayMat, gray, cv.COLOR_RGBA2GRAY);
+                cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+                cv.Canny(blurred, edged, 75, 200);
+
+                let contours = new cv.MatVector();
+                let hierarchy = new cv.Mat();
+                cv.findContours(edged, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+                let maxArea = 0;
+                let maxContourIndex = -1;
+                for(let i=0; i<contours.size(); i++) {
+                    let cnt = contours.get(i);
+                    let area = cv.contourArea(cnt);
+                    if(area > maxArea) {
+                        let peri = cv.arcLength(cnt, true);
+                        let approx = new cv.Mat();
+                        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+                        if(approx.rows === 4) {
+                            maxArea = area;
+                            maxContourIndex = i;
+                        }
+                        approx.delete();
+                    }
+                }
+
+                if(maxContourIndex !== -1) {
+                    let cnt = contours.get(maxContourIndex);
+                    let peri = cv.arcLength(cnt, true);
+                    let approx = new cv.Mat();
+                    cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+                    let pts = [];
+                    for(let i=0; i<4; i++) {
+                        pts.push({x: approx.data32S[i*2], y: approx.data32S[i*2+1]});
+                    }
+                    
+                    // 時計回りに並び替え (TL, TR, BR, BL)
+                    pts.sort((a,b) => a.y - b.y);
+                    const top = pts.slice(0,2).sort((a,b) => a.x - b.x);
+                    const bottom = pts.slice(2,4).sort((a,b) => b.x - a.x);
+                    points = [top[0], top[1], bottom[0], bottom[1]];
+                    
+                    approx.delete();
+                    redrawCanvas();
+                } else {
+                    alert('明確な四角形が見つかりませんでした。手動で調整してください。');
+                }
+
+                gray.delete(); blurred.delete(); edged.delete(); contours.delete(); hierarchy.delete();
+                hideLoading();
+            }, 50);
+        });
+
+        // 台形補正実行
+        document.getElementById('btnPerspective').addEventListener('click', () => {
+            if(points.length !== 4) return;
+            showLoading('補正中...');
+            setTimeout(() => {
+                const tl = points[0], tr = points[1], br = points[2], bl = points[3];
+                // 幅と高さの計算
+                const widthA = Math.sqrt(Math.pow(br.x - bl.x, 2) + Math.pow(br.y - bl.y, 2));
+                const widthB = Math.sqrt(Math.pow(tr.x - tl.x, 2) + Math.pow(tr.y - tl.y, 2));
+                const maxWidth = Math.max(parseInt(widthA), parseInt(widthB));
+
+                const heightA = Math.sqrt(Math.pow(tr.x - br.x, 2) + Math.pow(tr.y - br.y, 2));
+                const heightB = Math.sqrt(Math.pow(tl.x - bl.x, 2) + Math.pow(tl.y - bl.y, 2));
+                const maxHeight = Math.max(parseInt(heightA), parseInt(heightB));
+
+                let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, bl.x, bl.y, br.x, br.y]);
+                let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, maxWidth, 0, 0, maxHeight, maxWidth, maxHeight]);
+
+                let M = cv.getPerspectiveTransform(srcTri, dstTri);
+                let warped = new cv.Mat();
+                cv.warpPerspective(displayMat, warped, M, new cv.Size(maxWidth, maxHeight));
+
+                displayMat.delete();
+                displayMat = warped;
+                points = []; // Update points state
+                
+                // キャンバスサイズを画像サイズに合わせる
+                imageCanvas.width = maxWidth;
+                imageCanvas.height = maxHeight;
+                
+                cv.imshow('mainCanvas', displayMat);
+                
+                srcTri.delete(); dstTri.delete(); M.delete();
+                hideLoading();
+            }, 50);
+        });
+
+        // 白黒化
+        document.getElementById('btnBinarize').addEventListener('click', () => {
+            showLoading('白黒化処理中...');
+            setTimeout(() => {
+                let gray = new cv.Mat();
+                cv.cvtColor(displayMat, gray, cv.COLOR_RGBA2GRAY);
+                
+                let binary = new cv.Mat();
+                // Adaptive Threshold
+                cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 15, 10);
+                
+                displayMat.delete();
+                // RGB形式に戻しておく(表示等のため)
+                cv.cvtColor(binary, displayMat = new cv.Mat(), cv.COLOR_GRAY2RGBA);
+                
+                gray.delete(); binary.delete();
+                points = [];
+                cv.imshow('mainCanvas', displayMat);
+                hideLoading();
+            }, 50);
+        });
+
+        // 自動回転補正 (Hough Lines)
+        document.getElementById('btnHoughRotate').addEventListener('click', () => {
+            showLoading('回転補正中...');
+            setTimeout(() => {
+                let gray = new cv.Mat();
+                cv.cvtColor(displayMat, gray, cv.COLOR_RGBA2GRAY);
+                let edges = new cv.Mat();
+                cv.Canny(gray, edges, 50, 150, 3);
+                
+                let lines = new cv.Mat();
+                cv.HoughLines(edges, lines, 1, Math.PI / 180, 200);
+                
+                let angleSum = 0;
+                let lineCount = 0;
+                // 推定角度計算（水平・垂直に近い直線の角度を取る）
+                for (let i = 0; i < lines.rows; ++i) {
+                    let rho = lines.data32F[i * 2];
+                    let theta = lines.data32F[i * 2 + 1];
+                    let angleDeg = (theta * 180) / Math.PI;
+                    // 水平線(-90~90の表現に直す)
+                    let deg = angleDeg > 90 ? angleDeg - 180 : angleDeg;
+                    if(Math.abs(deg) < 45) { // 水平線に近いもの
+                        angleSum += deg;
+                        lineCount++;
+                    }
+                }
+                
+                if(lineCount > 0) {
+                    let avgAngle = angleSum / lineCount;
+                    // 回転
+                    let center = new cv.Point(displayMat.cols / 2, displayMat.rows / 2);
+                    let M = cv.getRotationMatrix2D(center, avgAngle, 1);
+                    let rotated = new cv.Mat();
+                    cv.warpAffine(displayMat, rotated, M, new cv.Size(displayMat.cols, displayMat.rows), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+                    
+                    displayMat.delete();
+                    displayMat = rotated;
+                    cv.imshow('mainCanvas', displayMat);
+                    M.delete();
+                } else {
+                    alert('回転する基準となる直線が見つかりませんでした。');
+                }
+                
+                gray.delete(); edges.delete(); lines.delete();
+                points = []; // 回転した場合はポイントリセット
+                hideLoading();
+            }, 50);
+        });
+
+        // ページを確定して保存
+        document.getElementById('btnSavePage').addEventListener('click', () => {
+            // 現在のキャンバスの内容をBase64で保存
+            const dataUrl = imageCanvas.toDataURL('image/jpeg', 0.8);
+            capturedPages.push(dataUrl);
+            
+            // サムネイル表示
+            const img = document.createElement('img');
+            img.src = dataUrl;
+            img.className = 'thumbnail';
+            document.getElementById('thumbnailList').appendChild(img);
+            
+            document.getElementById('pageCount').innerText = capturedPages.length;
+            document.getElementById('btnGenerateShare').style.display = 'block';
+            
+            // 状態リセット
+            document.getElementById('canvasContainer').style.display = 'none';
+            document.getElementById('editControls').style.display = 'none';
+            if(displayMat) { displayMat.delete(); displayMat = null; }
+            if(originalMat) { originalMat.delete(); originalMat = null; }
+        });
+
+        // PDF生成＆OCR共有
+        document.getElementById('btnGenerateShare').addEventListener('click', async () => {
+            if(capturedPages.length === 0) return;
+            showLoading('OCR実行およびPDF生成中...\n(初回は特に時間がかかります)');
+
+            try {
+                // Tesseract OCR 初期化と言語データ指定
+                const worker = await Tesseract.createWorker('jpn', 1, {
+                    workerPath: './tesseract.min.js',
+                    corePath: './tesseract.min.js',
+                    langPath: './', // gzip データがここにある
+                });
+                
+                // OCR: 最初のページからテキスト抽出 (全ページやると重すぎるため)
+                const { data: { text } } = await worker.recognize(capturedPages[0]);
+                await worker.terminate();
+
+                const safeText = text.replace(/[\r\n\s]/g, '').slice(0, 10);
+                const dateStr = new Date().toISOString().slice(0,10).replace(/-/g, '');
+                const filename = `Scan_${dateStr}_${safeText || 'Data'}.pdf`;
+
+                // jsPDFで生成
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const pdfW = pdf.internal.pageSize.getWidth();
+                const pdfH = pdf.internal.pageSize.getHeight();
+
+                for(let i=0; i<capturedPages.length; i++) {
+                    if (i > 0) pdf.addPage();
+                    let imgProps = pdf.getImageProperties(capturedPages[i]);
+                    let ratio = Math.min(pdfW / imgProps.width, pdfH / imgProps.height);
+                    let imgW = imgProps.width * ratio;
+                    let imgH = imgProps.height * ratio;
+                    let x = (pdfW - imgW) / 2;
+                    let y = (pdfH - imgH) / 2;
+                    pdf.addImage(capturedPages[i], 'JPEG', x, y, imgW, imgH);
+                }
+
+                // 出力して共有
+                const pdfBlob = pdf.output('blob');
+                const file = new File([pdfBlob], filename, { type: 'application/pdf' });
+                
+                hideLoading();
+
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                    try {
+                        await navigator.share({
+                            files: [file],
+                            title: filename,
+                            text: 'スキャン済みドキュメント'
+                        });
+                    } catch (e) {
+                        console.log('Share canceled or failed', e);
+                    }
+                } else {
+                    // フォールバック: ダウンロードリンク
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(pdfBlob);
+                    link.download = filename;
+                    link.click();
+                    URL.revokeObjectURL(link.href);
+                }
+
+            } catch (err) {
+                console.error(err);
+                alert('処理中にエラーが発生しました: ' + err.message);
+                hideLoading();
+            }
+        });
+    </script>
+</body>
+</html>

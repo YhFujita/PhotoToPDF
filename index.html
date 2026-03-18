@@ -76,8 +76,8 @@
         <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有</button>
 
         <footer style="margin-top: 40px; text-align: center; color: #888; font-size: 0.85rem; padding-top: 10px; border-top: 1px solid #ddd;">
-             v3.6 - 操作性向上版<br>
-             (辺ドラッグ移動・長押し削除・高度な領域拡大を追加)
+             v3.7 - PDF出力機能強化版<br>
+             (PDF保存時のファイル名指定機能追加・OCR非使用時の挙動改善)
         </footer>
     </main>
 
@@ -688,12 +688,24 @@
         // PDF生成＆共有
         document.getElementById('btnGenerateShare').addEventListener('click', async () => {
             if(capturedPages.length === 0) return;
+            
+            // デフォルトのファイル名を作成
+            const dateStr = new Date().toISOString().slice(0,10).replace(/-/g, '');
+            // OCRが実行されていればテキストを付与し、なければ日付のみ
+            const defaultName = window.lastOCRText ? `Scan_${dateStr}_${window.lastOCRText}` : `Scan_${dateStr}`;
+            
+            // ファイル名の入力プロンプトを表示
+            const userInput = prompt("保存するPDFのファイル名を入力してください（拡張子 .pdf は不要です）", defaultName);
+            
+            // キャンセルボタンが押された場合は処理を中断
+            if(userInput === null) return;
+            
+            const finalName = userInput.trim() === "" ? defaultName : userInput.trim();
+            const filename = finalName.endsWith('.pdf') ? finalName : `${finalName}.pdf`;
+
             showLoading('PDF生成中...');
 
             try {
-                const safeText = window.lastOCRText || 'Data';
-                const dateStr = new Date().toISOString().slice(0,10).replace(/-/g, '');
-                const filename = `Scan_${dateStr}_${safeText}.pdf`;
 
                 // jsPDFで生成 (Umd版からの抽出)
                 const jsPDF = window.jspdf.jsPDF;

@@ -76,8 +76,8 @@
         <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有</button>
 
         <footer style="margin-top: 40px; text-align: center; color: #888; font-size: 0.85rem; padding-top: 10px; border-top: 1px solid #ddd;">
-             v3.5 - 手動回転対応版<br>
-             (領域拡大・滑らかな白黒化・写真ライブラリ対応・手動回転追加)
+             v3.6 - 操作性向上版<br>
+             (辺ドラッグ移動・長押し削除・高度な領域拡大を追加)
         </footer>
     </main>
 
@@ -230,58 +230,136 @@
         const getPointerPos = (e) => {
             const rect = imageCanvas.getBoundingClientRect();
             // キャンバス内のCSS表示サイズと実際のピクセル数の比率を計算
+            let clientX = e.clientX;
+            let clientY = e.clientY;
+            if(e.touches && e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            }
             const scaleX = imageCanvas.width / rect.width;
             const scaleY = imageCanvas.height / rect.height;
             return {
-                x: (e.clientX - rect.left) * scaleX,
-                y: (e.clientY - rect.top) * scaleY
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
             };
         };
 
-        imageCanvas.addEventListener('pointerdown', (e) => {
+        // 線分と点の距離を計算する関数
+        const distToSegment = (p, v, w) => {
+            let l2 = Math.pow(v.x - w.x, 2) + Math.pow(v.y - w.y, 2);
+            if (l2 === 0) return Math.pow(p.x - v.x, 2) + Math.pow(p.y - v.y, 2);
+            let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return Math.pow(p.x - (v.x + t * (w.x - v.x)), 2) + Math.pow(p.y - (v.y + t * (w.y - v.y)), 2);
+        };
+
+        const handlePointerDown = (e) => {
             if(points.length !== 4) return;
             e.preventDefault();
             const pos = getPointerPos(e);
+            
+            // 1. まず「頂点」がタップされたか判定 (優先)
             let minDist = Infinity;
             let targetIdx = -1;
-            const hitRadius = imageCanvas.width < 500 ? 900 : 3600; // 距離の2乗(30^2 or 60^2)
+            const hitRadiusNode = imageCanvas.width < 500 ? 900 : 3600; // 30^2 or 60^2
             
             for(let i=0; i<4; i++) {
                 const dist = Math.pow(points[i].x - pos.x, 2) + Math.pow(points[i].y - pos.y, 2);
-                if(dist < hitRadius && dist < minDist) {
+                if(dist < hitRadiusNode && dist < minDist) {
                     minDist = dist;
                     targetIdx = i;
                 }
             }
+            
             if(targetIdx !== -1) {
                 isDragging = true;
                 dragIndex = targetIdx;
+                dragType = 'node';
+                return;
             }
-        });
 
-        imageCanvas.addEventListener('pointermove', (e) => {
+            // 2. 頂点でなければ「辺（線分）」がタップされたか判定
+            const hitRadiusEdge = imageCanvas.width < 500 ? 900 : 3600;
+            let minEdgeDist = Infinity;
+            let targetEdgeIdx = -1;
+            for(let i=0; i<4; i++) {
+                let p1 = points[i];
+                let p2 = points[(i+1)%4];
+                let distSq = distToSegment(pos, p1, p2);
+                if (distSq < hitRadiusEdge && distSq < minEdgeDist) {
+                    minEdgeDist = distSq;
+                    targetEdgeIdx = i;
+                }
+            }
+
+            if(targetEdgeIdx !== -1) {
+                isDragging = true;
+                dragIndex = targetEdgeIdx; // 0: top, 1: right, 2: bottom, 3: left (順序による)
+                dragType = 'edge';
+                lastPointerPos = pos;
+            }
+        };
+
+        const handlePointerMove = (e) => {
             if(!isDragging) return;
             e.preventDefault();
             const pos = getPointerPos(e);
-            // 範囲内に制限
-            pos.x = Math.max(0, Math.min(imageCanvas.width, pos.x));
-            pos.y = Math.max(0, Math.min(imageCanvas.height, pos.y));
-            points[dragIndex] = pos;
+            
+            if (dragType === 'node') {
+                // 頂点の移動
+                pos.x = Math.max(0, Math.min(imageCanvas.width, pos.x));
+                pos.y = Math.max(0, Math.min(imageCanvas.height, pos.y));
+                points[dragIndex] = pos;
+            } else if (dragType === 'edge' && lastPointerPos) {
+                // 辺（つながる2頂点）の並行移動
+                let dx = pos.x - lastPointerPos.x;
+                let dy = pos.y - lastPointerPos.y;
+                let p1Idx = dragIndex;
+                let p2Idx = (dragIndex + 1) % 4;
+                
+                // 画面外にはみ出ないように移動量を制限
+                let newP1X = points[p1Idx].x + dx; let newP1Y = points[p1Idx].y + dy;
+                let newP2X = points[p2Idx].x + dx; let newP2Y = points[p2Idx].y + dy;
+                
+                if (newP1X >= 0 && newP1X <= imageCanvas.width && newP2X >= 0 && newP2X <= imageCanvas.width &&
+                    newP1Y >= 0 && newP1Y <= imageCanvas.height && newP2Y >= 0 && newP2Y <= imageCanvas.height) {
+                    points[p1Idx].x = newP1X; points[p1Idx].y = newP1Y;
+                    points[p2Idx].x = newP2X; points[p2Idx].y = newP2Y;
+                    lastPointerPos = pos;
+                }
+            }
             redrawCanvas();
-        });
+        };
 
-        const stopDrag = (e) => { isDragging = false; dragIndex = -1; };
-        imageCanvas.addEventListener('pointerup', stopDrag);
-        imageCanvas.addEventListener('pointerleave', stopDrag);
+        let dragType = null; // 'node' or 'edge'
+        let lastPointerPos = null;
+        const stopDrag = (e) => { isDragging = false; dragIndex = -1; dragType = null; };
 
-        // 自動台形検出ロジック
-        const performAutoDetect = () => {
+        // Support both mouse and touch
+        imageCanvas.addEventListener('mousedown', handlePointerDown);
+        imageCanvas.addEventListener('mousemove', handlePointerMove);
+        imageCanvas.addEventListener('mouseup', stopDrag);
+        imageCanvas.addEventListener('mouseleave', stopDrag);
+        
+        imageCanvas.addEventListener('touchstart', handlePointerDown, {passive: false});
+        imageCanvas.addEventListener('touchmove', handlePointerMove, {passive: false});
+        imageCanvas.addEventListener('touchend', stopDrag);
+
+        // 自動台形検出ロジック (引数 loosen: trueならしきい値を緩めてより広い範囲・曖昧な線を拾う)
+        const performAutoDetect = (loosen = false) => {
             let gray = new cv.Mat();
             let blurred = new cv.Mat();
             let edged = new cv.Mat();
             cv.cvtColor(displayMat, gray, cv.COLOR_RGBA2GRAY);
-            cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-            cv.Canny(blurred, edged, 75, 200);
+            
+            // loosen が true の場合はぼかしを強くし、Cannyの閾値を下げる
+            if (loosen) {
+                cv.GaussianBlur(gray, blurred, new cv.Size(9, 9), 0);
+                cv.Canny(blurred, edged, 30, 100);
+            } else {
+                cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+                cv.Canny(blurred, edged, 75, 200);
+            }
 
             let contours = new cv.MatVector();
             let hierarchy = new cv.Mat();
@@ -295,7 +373,9 @@
                 if(area > maxArea) {
                     let peri = cv.arcLength(cnt, true);
                     let approx = new cv.Mat();
-                    cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+                    // loosen が true の場合は近似の許容度も少し上げる
+                    let epsilon = loosen ? 0.04 * peri : 0.02 * peri;
+                    cv.approxPolyDP(cnt, approx, epsilon, true);
                     if(approx.rows === 4) {
                         maxArea = area;
                         maxContourIndex = i;
@@ -319,7 +399,7 @@
                 pts.sort((a,b) => a.y - b.y);
                 const top = pts.slice(0,2).sort((a,b) => a.x - b.x);
                 const bottom = pts.slice(2,4).sort((a,b) => b.x - a.x);
-                points = [top[0], top[1], bottom[0], bottom[1]];
+                points = [top[0], top[1], bottom[1], bottom[0]]; // (TL, TR, BR, BLの順を厳密に担保)
                 
                 approx.delete();
                 foundArea = true;
@@ -334,9 +414,35 @@
         document.getElementById('btnAutoDetect').addEventListener('click', () => {
             showLoading('自動検出中...');
             setTimeout(() => {
-                const found = performAutoDetect();
+                const found = performAutoDetect(false);
                 if(!found) {
                     alert('明確な四角形が見つかりませんでした。手動で調整してください。');
+                }
+                hideLoading();
+            }, 50);
+        });
+
+        // 枠の拡大 (広範囲で再検出)
+        document.getElementById('btnExpandArea').addEventListener('click', () => {
+            showLoading('広範囲で再検出中...');
+            setTimeout(() => {
+                const found = performAutoDetect(true);
+                if(!found) {
+                    // もし見つからなかった場合は物理的な拡大変換を行う（フォールバック）
+                    if (points.length === 4) {
+                        let cx = (points[0].x + points[1].x + points[2].x + points[3].x) / 4;
+                        let cy = (points[0].y + points[1].y + points[2].y + points[3].y) / 4;
+                        const scale = 1.05;
+                        for (let i = 0; i < 4; i++) {
+                            let dx = points[i].x - cx;
+                            let dy = points[i].y - cy;
+                            points[i].x = Math.max(0, Math.min(imageCanvas.width, cx + dx * scale));
+                            points[i].y = Math.max(0, Math.min(imageCanvas.height, cy + dy * scale));
+                        }
+                        redrawCanvas();
+                    } else {
+                        alert('拡張する枠がありません。');
+                    }
                 }
                 hideLoading();
             }, 50);
@@ -379,22 +485,7 @@
             }, 50);
         });
 
-        // 枠の拡大
-        document.getElementById('btnExpandArea').addEventListener('click', () => {
-            if (points.length !== 4) return;
-            // 4点の中心を求める
-            let cx = (points[0].x + points[1].x + points[2].x + points[3].x) / 4;
-            let cy = (points[0].y + points[1].y + points[2].y + points[3].y) / 4;
-            
-            const scale = 1.05; // 5%外側へ拡大する
-            for (let i = 0; i < 4; i++) {
-                let dx = points[i].x - cx;
-                let dy = points[i].y - cy;
-                points[i].x = Math.max(0, Math.min(imageCanvas.width, cx + dx * scale));
-                points[i].y = Math.max(0, Math.min(imageCanvas.height, cy + dy * scale));
-            }
-            redrawCanvas();
-        });
+        // (btnExpandAreaは上に移動したためここからは削除)
 
         // 白黒化（色彩を薄く、滑らかなグレースケール調へ）
         document.getElementById('btnBinarize').addEventListener('click', () => {
@@ -502,10 +593,46 @@
             capturedPages.push(dataUrl);
             
             // サムネイル表示
+            const imgContainer = document.createElement('div');
+            imgContainer.style.display = 'inline-block';
+            imgContainer.style.position = 'relative';
+            imgContainer.style.margin = '5px';
+            
             const img = document.createElement('img');
             img.src = dataUrl;
             img.className = 'thumbnail';
-            document.getElementById('thumbnailList').appendChild(img);
+            imgContainer.appendChild(img);
+            
+            // 長押しで削除を判定するロジック
+            let pressTimer;
+            const cancelLongPress = () => clearTimeout(pressTimer);
+            const startLongPress = (e) => {
+                cancelLongPress();
+                pressTimer = setTimeout(() => {
+                    if(confirm('このページを削除しますか？')) {
+                        // データ配列から削除
+                        const idx = Array.from(document.getElementById('thumbnailList').children).indexOf(imgContainer);
+                        if(idx > -1) {
+                            capturedPages.splice(idx, 1);
+                            imgContainer.remove();
+                            document.getElementById('pageCount').innerText = capturedPages.length;
+                            if(capturedPages.length === 0) {
+                                document.getElementById('btnRunOCR').style.display = 'none';
+                                document.getElementById('btnGenerateShare').style.display = 'none';
+                            }
+                        }
+                    }
+                }, 800); // 800ms長押しで発動
+            };
+            
+            imgContainer.addEventListener('mousedown', startLongPress);
+            imgContainer.addEventListener('touchstart', startLongPress, {passive: true});
+            imgContainer.addEventListener('mouseup', cancelLongPress);
+            imgContainer.addEventListener('mouseleave', cancelLongPress);
+            imgContainer.addEventListener('touchend', cancelLongPress);
+            imgContainer.addEventListener('touchmove', cancelLongPress);
+
+            document.getElementById('thumbnailList').appendChild(imgContainer);
             
             document.getElementById('pageCount').innerText = capturedPages.length;
             document.getElementById('btnRunOCR').style.display = 'block';

@@ -74,7 +74,7 @@
         <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有</button>
 
         <footer style="margin-top: 40px; text-align: center; color: #888; font-size: 0.85rem; padding-top: 10px; border-top: 1px solid #ddd;">
-             v3.2 - OCRエラー修正版<br>
+             v3.3 - OCR初期化・画像データ渡し修正版<br>
              (リロード確認用: ボタンをOCR・PDFで二つに分けました)
         </footer>
     </main>
@@ -476,15 +476,26 @@
             if(capturedPages.length === 0) return;
             showLoading('OCRエンジン初期化中...');
             try {
-                const worker = await Tesseract.createWorker('jpn', 1, {
-                    logger: m => console.log(m),
+                const worker = await Tesseract.createWorker({
+                    logger: m => {
+                        console.log(m);
+                        if (m.status) showLoading(`OCR処理中: ${m.status} (${Math.round(m.progress * 100)}%)`);
+                    },
                     workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/worker.min.js',
                     corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@4/tesseract-core.wasm.js',
                     langPath: 'https://tessdata.projectnaptha.com/4.0.0',
                 });
                 
+                await worker.loadLanguage('jpn');
+                await worker.initialize('jpn');
+                
+                // SetImageFileエラーを防ぐため、DataURL文字列ではなくImage要素を渡す
+                const ocrImg = new Image();
+                ocrImg.src = capturedPages[0];
+                await new Promise(r => { ocrImg.onload = r; });
+
                 showLoading('テキスト抽出中...');
-                const { data: { text } } = await worker.recognize(capturedPages[0]);
+                const { data: { text } } = await worker.recognize(ocrImg);
                 await worker.terminate();
 
                 const safeText = text.replace(/[\r\n\s]/g, '');

@@ -52,11 +52,12 @@
         
         <div>
             <label for="cameraInput" class="btn btn-primary">📷 写真を撮る / 選ぶ</label>
-            <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;">
+            <input type="file" id="cameraInput" accept="image/*" style="display:none;">
         </div>
         
         <div id="editControls" style="display:none; margin-top:10px;">
             <button id="btnAutoDetect" class="btn">自動領域検出</button>
+            <button id="btnExpandArea" class="btn">枠を少し拡大</button>
             <button id="btnPerspective" class="btn btn-success">台形補正実行</button>
             <button id="btnBinarize" class="btn">白黒化</button>
             <button id="btnHoughRotate" class="btn">自動回転補正</button>
@@ -74,8 +75,8 @@
         <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有</button>
 
         <footer style="margin-top: 40px; text-align: center; color: #888; font-size: 0.85rem; padding-top: 10px; border-top: 1px solid #ddd;">
-             v3.3 - OCR初期化・画像データ渡し修正版<br>
-             (リロード確認用: ボタンをOCR・PDFで二つに分けました)
+             v3.4 - アルゴリズム改善＆写真選択対応版<br>
+             (領域拡大・滑らかな白黒化・写真ライブラリ対応追加)
         </footer>
     </main>
 
@@ -377,22 +378,44 @@
             }, 50);
         });
 
-        // 白黒化
+        // 枠の拡大
+        document.getElementById('btnExpandArea').addEventListener('click', () => {
+            if (points.length !== 4) return;
+            // 4点の中心を求める
+            let cx = (points[0].x + points[1].x + points[2].x + points[3].x) / 4;
+            let cy = (points[0].y + points[1].y + points[2].y + points[3].y) / 4;
+            
+            const scale = 1.05; // 5%外側へ拡大する
+            for (let i = 0; i < 4; i++) {
+                let dx = points[i].x - cx;
+                let dy = points[i].y - cy;
+                points[i].x = Math.max(0, Math.min(imageCanvas.width, cx + dx * scale));
+                points[i].y = Math.max(0, Math.min(imageCanvas.height, cy + dy * scale));
+            }
+            redrawCanvas();
+        });
+
+        // 白黒化（色彩を薄く、滑らかなグレースケール調へ）
         document.getElementById('btnBinarize').addEventListener('click', () => {
             showLoading('白黒化処理中...');
             setTimeout(() => {
                 let gray = new cv.Mat();
                 cv.cvtColor(displayMat, gray, cv.COLOR_RGBA2GRAY);
                 
-                let binary = new cv.Mat();
-                // Adaptive Threshold
-                cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 15, 10);
+                // 完全な2値化（ジャギーが発生するAdaptiveThreshold）を避け、
+                // 明るさとコントラストを調整して「滑らかな白黒」にする
+                // alpha (コントラスト): 1.4, beta (明るさ): 20 程度で紙の白さを飛ばしつつ文字を残す
+                gray.convertTo(gray, -1, 1.4, 20);
+                
+                // 軽いぼかしを入れることで、文字のジャギーをなめらかにする
+                let blurred = new cv.Mat();
+                cv.GaussianBlur(gray, blurred, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
                 
                 displayMat.delete();
-                // RGB形式に戻しておく(表示等のため)
-                cv.cvtColor(binary, displayMat = new cv.Mat(), cv.COLOR_GRAY2RGBA);
+                displayMat = new cv.Mat();
+                cv.cvtColor(blurred, displayMat, cv.COLOR_GRAY2RGBA);
                 
-                gray.delete(); binary.delete();
+                gray.delete(); blurred.delete();
                 points = [];
                 cv.imshow('mainCanvas', displayMat);
                 hideLoading();

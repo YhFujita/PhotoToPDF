@@ -196,8 +196,7 @@
                     
                     originalMat = cv.imread(tempCanvas);
                     displayMat = originalMat.clone();
-                    
-                    // 初期4点設定 (画像枠より少し内側)
+                    // 初期4点設定 (画像枠より少し内側) - フォールバック用
                     points = [
                         {x: w*0.1, y: h*0.1},
                         {x: w*0.9, y: h*0.1},
@@ -207,8 +206,13 @@
                     
                     document.getElementById('canvasContainer').style.display = 'block';
                     document.getElementById('editControls').style.display = 'block';
-                    redrawCanvas();
-                    hideLoading();
+                    
+                    // 初期表示時に自動検出を試みる
+                    setTimeout(() => {
+                        performAutoDetect();
+                        redrawCanvas();
+                        hideLoading();
+                    }, 50);
                 };
                 img.src = event.target.result;
             };
@@ -263,61 +267,70 @@
         imageCanvas.addEventListener('pointerup', stopDrag);
         imageCanvas.addEventListener('pointerleave', stopDrag);
 
-        // 自動台形検出
-        document.getElementById('btnAutoDetect').addEventListener('click', () => {
-            showLoading('自動検出中...');
-            setTimeout(() => {
-                let gray = new cv.Mat();
-                let blurred = new cv.Mat();
-                let edged = new cv.Mat();
-                cv.cvtColor(displayMat, gray, cv.COLOR_RGBA2GRAY);
-                cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-                cv.Canny(blurred, edged, 75, 200);
+        // 自動台形検出ロジック
+        const performAutoDetect = () => {
+            let gray = new cv.Mat();
+            let blurred = new cv.Mat();
+            let edged = new cv.Mat();
+            cv.cvtColor(displayMat, gray, cv.COLOR_RGBA2GRAY);
+            cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+            cv.Canny(blurred, edged, 75, 200);
 
-                let contours = new cv.MatVector();
-                let hierarchy = new cv.Mat();
-                cv.findContours(edged, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+            let contours = new cv.MatVector();
+            let hierarchy = new cv.Mat();
+            cv.findContours(edged, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
-                let maxArea = 0;
-                let maxContourIndex = -1;
-                for(let i=0; i<contours.size(); i++) {
-                    let cnt = contours.get(i);
-                    let area = cv.contourArea(cnt);
-                    if(area > maxArea) {
-                        let peri = cv.arcLength(cnt, true);
-                        let approx = new cv.Mat();
-                        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-                        if(approx.rows === 4) {
-                            maxArea = area;
-                            maxContourIndex = i;
-                        }
-                        approx.delete();
-                    }
-                }
-
-                if(maxContourIndex !== -1) {
-                    let cnt = contours.get(maxContourIndex);
+            let maxArea = 0;
+            let maxContourIndex = -1;
+            for(let i=0; i<contours.size(); i++) {
+                let cnt = contours.get(i);
+                let area = cv.contourArea(cnt);
+                if(area > maxArea) {
                     let peri = cv.arcLength(cnt, true);
                     let approx = new cv.Mat();
                     cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-                    let pts = [];
-                    for(let i=0; i<4; i++) {
-                        pts.push({x: approx.data32S[i*2], y: approx.data32S[i*2+1]});
+                    if(approx.rows === 4) {
+                        maxArea = area;
+                        maxContourIndex = i;
                     }
-                    
-                    // 時計回りに並び替え (TL, TR, BR, BL)
-                    pts.sort((a,b) => a.y - b.y);
-                    const top = pts.slice(0,2).sort((a,b) => a.x - b.x);
-                    const bottom = pts.slice(2,4).sort((a,b) => b.x - a.x);
-                    points = [top[0], top[1], bottom[0], bottom[1]];
-                    
                     approx.delete();
-                    redrawCanvas();
-                } else {
+                }
+            }
+
+            let foundArea = false;
+            if(maxContourIndex !== -1) {
+                let cnt = contours.get(maxContourIndex);
+                let peri = cv.arcLength(cnt, true);
+                let approx = new cv.Mat();
+                cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+                let pts = [];
+                for(let i=0; i<4; i++) {
+                    pts.push({x: approx.data32S[i*2], y: approx.data32S[i*2+1]});
+                }
+                
+                // 時計回りに並び替え (TL, TR, BR, BL)
+                pts.sort((a,b) => a.y - b.y);
+                const top = pts.slice(0,2).sort((a,b) => a.x - b.x);
+                const bottom = pts.slice(2,4).sort((a,b) => b.x - a.x);
+                points = [top[0], top[1], bottom[0], bottom[1]];
+                
+                approx.delete();
+                foundArea = true;
+            }
+
+            gray.delete(); blurred.delete(); edged.delete(); contours.delete(); hierarchy.delete();
+            redrawCanvas();
+            return foundArea;
+        };
+
+        // 自動台形検出（ボタンから）
+        document.getElementById('btnAutoDetect').addEventListener('click', () => {
+            showLoading('自動検出中...');
+            setTimeout(() => {
+                const found = performAutoDetect();
+                if(!found) {
                     alert('明確な四角形が見つかりませんでした。手動で調整してください。');
                 }
-
-                gray.delete(); blurred.delete(); edged.delete(); contours.delete(); hierarchy.delete();
                 hideLoading();
             }, 50);
         });

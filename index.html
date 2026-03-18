@@ -77,9 +77,6 @@
     <!-- Scripts: ローカルファイルとして配置 -->
     <script src="./jspdf.umd.min.js"></script>
     <script src="./tesseract.min.js"></script>
-    <!-- OpenCV is loaded asynchronously -->
-    <script async src="./opencv.js" onload="onOpenCvReady();"></script>
-
     <script>
         // PWA サービスワーカー
         if ('serviceWorker' in navigator) {
@@ -87,6 +84,18 @@
         }
 
         let cvReady = false;
+
+        // Script loading approach
+        function loadOpenCv() {
+            const script = document.createElement('script');
+            script.src = './opencv.js';
+            script.async = true;
+            script.onload = () => {
+                checkOpenCvReady();
+            };
+            document.head.appendChild(script);
+        }
+
         function checkOpenCvReady() {
             if (typeof cv !== 'undefined') {
                 if (cv instanceof Promise) {
@@ -107,15 +116,9 @@
             setTimeout(checkOpenCvReady, 100);
         }
         
-        function onOpenCvReady() {
-            if (typeof cv !== 'undefined' && cv['onRuntimeInitialized']) {
-                cv['onRuntimeInitialized'] = () => {
-                    checkOpenCvReady();
-                };
-            } else {
-                checkOpenCvReady();
-            }
-        }
+        // Start loading
+        loadOpenCv();
+
 
 
         // State

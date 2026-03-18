@@ -74,7 +74,7 @@
         <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有</button>
 
         <footer style="margin-top: 40px; text-align: center; color: #888; font-size: 0.85rem; padding-top: 10px; border-top: 1px solid #ddd;">
-             v3.1 - OCR/PDF分離検証版<br>
+             v3.2 - OCRエラー修正版<br>
              (リロード確認用: ボタンをOCR・PDFで二つに分けました)
         </footer>
     </main>
@@ -477,9 +477,10 @@
             showLoading('OCRエンジン初期化中...');
             try {
                 const worker = await Tesseract.createWorker('jpn', 1, {
-                    workerPath: './tesseract.min.js',
-                    corePath: './tesseract.min.js',
-                    langPath: './',
+                    logger: m => console.log(m),
+                    workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/worker.min.js',
+                    corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@4/tesseract-core.wasm.js',
+                    langPath: 'https://tessdata.projectnaptha.com/4.0.0',
                 });
                 
                 showLoading('テキスト抽出中...');

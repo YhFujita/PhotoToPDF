@@ -61,6 +61,7 @@
             <button id="btnPerspective" class="btn btn-success">台形補正実行</button>
             <button id="btnBinarize" class="btn">白黒化</button>
             <button id="btnHoughRotate" class="btn">自動回転補正</button>
+            <button id="btnRotateManual" class="btn">手動回転 (90度)</button>
             <button id="btnSavePage" class="btn btn-primary" style="margin-top: 10px; width: 100%;">📄 このページを確定</button>
             <div style="font-size: 0.8rem; color: #666; margin-top: 5px;">※キャンバス上の○をドラッグして領域（4点）を手動調整できます</div>
         </div>
@@ -75,8 +76,8 @@
         <button id="btnGenerateShare" class="btn btn-danger" style="display:none; width: 100%; margin-top: 10px;">📄 PDF生成＆共有</button>
 
         <footer style="margin-top: 40px; text-align: center; color: #888; font-size: 0.85rem; padding-top: 10px; border-top: 1px solid #ddd;">
-             v3.4 - アルゴリズム改善＆写真選択対応版<br>
-             (領域拡大・滑らかな白黒化・写真ライブラリ対応追加)
+             v3.5 - 手動回転対応版<br>
+             (領域拡大・滑らかな白黒化・写真ライブラリ対応・手動回転追加)
         </footer>
     </main>
 
@@ -459,6 +460,9 @@
                     
                     displayMat.delete();
                     displayMat = rotated;
+                    
+                    imageCanvas.width = displayMat.cols;
+                    imageCanvas.height = displayMat.rows;
                     cv.imshow('mainCanvas', displayMat);
                     M.delete();
                 } else {
@@ -467,6 +471,26 @@
                 
                 gray.delete(); edges.delete(); lines.delete();
                 points = []; // 回転した場合はポイントリセット
+                hideLoading();
+            }, 50);
+        });
+
+        // 90度手動回転
+        document.getElementById('btnRotateManual').addEventListener('click', () => {
+            showLoading('回転処理中...');
+            setTimeout(() => {
+                let rotated = new cv.Mat();
+                cv.rotate(displayMat, rotated, cv.ROTATE_90_CLOCKWISE);
+                
+                displayMat.delete();
+                displayMat = rotated;
+                points = []; // 回転した場合はポイントリセット
+                
+                // キャンバスサイズを画像サイズに合わせる
+                imageCanvas.width = displayMat.cols;
+                imageCanvas.height = displayMat.rows;
+                
+                cv.imshow('mainCanvas', displayMat);
                 hideLoading();
             }, 50);
         });

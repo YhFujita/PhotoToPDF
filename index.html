@@ -87,13 +87,36 @@
         }
 
         let cvReady = false;
-        function onOpenCvReady() {
-            cv['onRuntimeInitialized'] = () => {
-                cvReady = true;
-                document.getElementById('statusMsg').innerText = "OpenCV 準備完了";
-                setTimeout(() => document.getElementById('statusMsg').innerText = "", 2000);
-            };
+        function checkOpenCvReady() {
+            if (typeof cv !== 'undefined') {
+                if (cv instanceof Promise) {
+                    cv.then((target) => {
+                        cv = target;
+                        checkOpenCvReady();
+                    });
+                    return;
+                }
+                
+                if (cv.Mat || (cv.get_build_information && cv.get_build_information())) {
+                    cvReady = true;
+                    document.getElementById('statusMsg').innerText = "OpenCV 準備完了";
+                    setTimeout(() => document.getElementById('statusMsg').innerText = "", 2000);
+                    return;
+                }
+            }
+            setTimeout(checkOpenCvReady, 100);
         }
+        
+        function onOpenCvReady() {
+            if (typeof cv !== 'undefined' && cv['onRuntimeInitialized']) {
+                cv['onRuntimeInitialized'] = () => {
+                    checkOpenCvReady();
+                };
+            } else {
+                checkOpenCvReady();
+            }
+        }
+
 
         // State
         const imageCanvas = document.getElementById('mainCanvas');
